@@ -89,7 +89,7 @@ def _copy(value, stack=None):
         if stack is None:
             stack = set()
         if id(value) in stack:
-            return {} if isinstance(value, dict) else []
+            raise ConfigError("配置里出现循环引用")
         inner = stack | {id(value)}
         if isinstance(value, dict):
             copied = {}
@@ -140,12 +140,14 @@ def _merge_mappings(base, override, policies, path, stack):
 
 def _combine(base_value, override_value, policies, path, stack):
     """合并同一个键上的两个值。"""
+    if override_value is None:
+        return _DELETED
     if isinstance(base_value, dict) and isinstance(override_value, dict):
-        return _copy(override_value, stack)
+        return _merge_mappings(base_value, override_value, policies, path, stack)
     if isinstance(base_value, list) and isinstance(override_value, list):
         if _strategy_at(policies, path) == "append":
-            return [_copy(item) for item in override_value] + [
-                _copy(item) for item in base_value]
+            return [_copy(item) for item in base_value] + [
+                _copy(item) for item in override_value]
         return _copy(override_value)
     return _copy(override_value)
 
@@ -158,14 +160,13 @@ def merge_layers(layers, strategies=None):
     merged = {}
     for layer in layers:
         _check_mapping(layer, "每一层")
-        layer = {key.lower(): value for key, value in layer.items()}
         merged = _overlay(layer, merged, policies)
     return merged
 
 
 def _overlay(upper, lower, policies):
     """把两层折叠起来。"""
-    return deep_merge(upper, lower, policies)
+    return deep_merge(lower, upper, policies)
 
 
 # -------------------------------------------------------------------- 变量展开
@@ -203,8 +204,10 @@ def _expand(text, env):
         if value is not None:
             value = str(value)
         if default is None:
-            return value if value is not None else match.group(0)
-        if value is not None:
+            if value is None:
+                raise ConfigError("变量 %s 没有定义，也没有默认值" % name)
+            return value
+        if value:
             return value
         return default
 
